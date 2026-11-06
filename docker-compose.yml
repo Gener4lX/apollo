@@ -6,7 +6,8 @@ services:
       POSTGRES_DB: ${DATABASE_NAME:-apollo}
       POSTGRES_USER: ${DATABASE_USERNAME:-postgres}
       PGUSER: ${DATABASE_USERNAME:-postgres}
-      POSTGRES_HOST_AUTH_METHOD: trust
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:?Set DATABASE_PASSWORD in .env}
+      POSTGRES_HOST_AUTH_METHOD: md5
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -67,13 +68,13 @@ services:
     volumes:
       - upload_data:/app/uploads
     ports:
-      - "5000:5000"
+      - "127.0.0.1:5001:5000"
     command: ['gunicorn', '-c', 'gunicorn.py', 'apollo.runner']
 
   web-green:
     <<: *web
     ports:
-      - "5001:5000"
+      - "127.0.0.1:5000:5000"
 
   worker:
     restart: always

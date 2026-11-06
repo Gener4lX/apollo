@@ -12,4 +12,8 @@ if DepotManager._middleware is None:
     application.wsgi_app = DepotManager.make_middleware(application.wsgi_app)
 
 if proxy_count > 0:
-    application.wsgi_app = ProxyFix(application.wsgi_app, x_for=proxy_count)
+    application.wsgi_app = ProxyFix(
+        application.wsgi_app,
+        x_for=proxy_count,
+        x_proto=proxy_count
+    )
