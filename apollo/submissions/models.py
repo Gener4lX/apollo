@@ -506,6 +506,17 @@ class Submission(BaseModel):
 
         return self._master
 
+    @property
+    def coordinates(self):
+        """Returns the (latitude, longitude) the submission was sent from, or None."""
+        if self.geom is None:
+            return None
+
+        from geoalchemy2.shape import to_shape
+
+        point = to_shape(self.geom)
+        return (point.y, point.x)
+
     def has_image_data(self):
         return any(self.data.get(tag) for tag in self.form.get_image_fields())
 

@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='css/slick.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/slick-theme.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/viewer.min.css') }}">
+<link rel="stylesheet" href="{{ asset_url_for('leaflet.css') }}">
 <style>
   .split {
     display: flex;
@@ -547,6 +548,18 @@
       </table>
     </div>
   </div>
+  <div class="tab-pane fade" id="map-panel" role="tabpanel" aria-labelledby="map-tab">
+    {%- set submission_coordinates = submission.coordinates %}
+    {%- if submission_coordinates %}
+    <div id="submissionMap" style="height: 60vh" data-latitude="{{ submission_coordinates[0] }}" data-longitude="{{ submission_coordinates[1] }}"></div>
+    <p class="text-muted small mt-2 mb-0">
+      {{ _('Sent from') }} <span class="text-monospace">{{ '%.6f'|format(submission_coordinates[0]) }}, {{ '%.6f'|format(submission_coordinates[1]) }}</span>
+      {%- if submission.participant_updated %} &mdash; <span class="timestamp-moment" data-timestamp="{{ submission.participant_updated|timestamp }}">{{ submission.participant_updated.strftime('%b %d, %Y %l:%M %p') }}</span>{% endif %}
+    </p>
+    {%- else %}
+    <div class="alert alert-warning mb-0">{{ _('No location data is available for this submission.') }}</div>
+    {%- endif %}
+  </div>
 </div>
 <input type="hidden" name="{{ master_form['location'].name }}" value="{{ master_form['location'].data.id|default('__None', true) }}" />
 
@@ -749,8 +762,40 @@
 <script src="{{ url_for('static', filename='js/lodash.min.js') }}"></script>
 <script src="{{ url_for('static', filename='js/compressor.min.js') }}"></script>
 <script src="{{ url_for('static', filename='js/viewer.min.js') }}"></script>
+<script type="text/javascript" src="{{ asset_url_for('leaflet.js') }}" charset="utf-8"></script>
 <script type="text/javascript">
   moment.lang('{{ g.locale }}');
+
+  // the map is created the first time its tab is shown, since Leaflet
+  // cannot compute sizes while the container is hidden
+  $(document).on('shown.bs.tab', '#map-tab', function () {
+    var container = document.getElementById('submissionMap');
+    if (!container) return;
+
+    if (container._leafletMap) {
+      container._leafletMap.invalidateSize();
+      return;
+    }
+
+    var latitude = parseFloat(container.dataset.latitude);
+    var longitude = parseFloat(container.dataset.longitude);
+    var submissionMap = L.map(container).setView([latitude, longitude], 16);
+{%- if config.MAPBOX_TOKEN %}
+    L.tileLayer('https://api.tiles.mapbox.com/v4/{id}/{z}/{x}/{y}.png?access_token={accessToken}', {
+      attribution: 'Map data &copy; <a href="https://www.openstreetmap.org/">OpenStreetMap</a> contributors, <a href="https://creativecommons.org/licenses/by-sa/2.0/">CC-BY-SA</a>, Imagery © <a href="https://www.mapbox.com/">Mapbox</a>',
+      maxZoom: 18,
+      id: 'mapbox.streets',
+      accessToken: '{{ config.MAPBOX_TOKEN }}'
+    }).addTo(submissionMap);
+{%- else %}
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: 'Map data &copy; <a href="https://www.openstreetmap.org/">OpenStreetMap</a> contributors',
+      maxZoom: 18
+    }).addTo(submissionMap);
+{%- endif %}
+    L.marker([latitude, longitude]).addTo(submissionMap);
+    container._leafletMap = submissionMap;
+  });
 
   document.addEventListener('click', function (event) {
     let element = event.target.closest('label[data-delete-label]');
