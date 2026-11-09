@@ -391,7 +391,9 @@ class FormBuilderSerializer(object):
         if len(data["fields"]) > 0:
             if data["fields"][0]["component"] != "group":
                 # no group was created, create a default
-                group = {"name": _("SMS 1"), "slug": slugify(_("SMS 1")), "fields": []}
+                # `_` is lazy_gettext; coerce to str so the value is JSON serializable
+                default_group_name = str(_("SMS 1"))
+                group = {"name": default_group_name, "slug": slugify(default_group_name), "fields": []}
                 groups.append(group)
                 current_group = group
 
@@ -402,9 +404,9 @@ class FormBuilderSerializer(object):
                 groups.append(group)
                 continue
 
-            field = {"tag": f["label"], "description": f["description"]}
+            field = {"tag": f["label"], "description": f.get("description", "")}
 
-            if f["analysis"]:
+            if f.get("analysis"):
                 field["analysis_type"] = f["analysis"]
             else:
                 field["analysis_type"] = "N/A"
@@ -425,12 +427,12 @@ class FormBuilderSerializer(object):
 
                     try:
                         min_limit = int(f.get("min", 0))
-                    except ValueError:
+                    except (TypeError, ValueError):
                         min_limit = 0
 
                     try:
                         max_limit = int(f.get("max", 9999))
-                    except ValueError:
+                    except (TypeError, ValueError):
                         max_limit = 9999
 
                     field["min"] = min_limit
