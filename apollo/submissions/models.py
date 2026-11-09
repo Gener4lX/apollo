@@ -517,6 +517,73 @@ class Submission(BaseModel):
         point = to_shape(self.geom)
         return (point.y, point.x)
 
+    def nearby_stations(self, distance=2000, limit=200):
+        """Returns polling stations for the map view, ordered by proximity when possible.
+
+        Participants are not tied to a polling station, so every location of the
+        polling station type that has coordinates is a candidate. The polling
+        station type is the deepest location type in the event's location set that
+        is flagged as having GPS coordinates; if none has coordinates, any location
+        with coordinates in the event's location set is used.
+        """
+        import math
+
+        from geoalchemy2.shape import to_shape
+        from sqlalchemy import func
+
+        from apollo.locations.models import Location, LocationType, LocationTypePath
+
+        if self.event is None:
+            return []
+
+        station_type = (
+            LocationType.query.filter_by(location_set_id=self.event.location_set_id, has_coordinates=True)
+            .outerjoin(LocationTypePath, LocationTypePath.descendant_id == LocationType.id)
+            .group_by(LocationType.id)
+            .order_by(func.count(LocationTypePath.ancestor_id).desc())
+            .first()
+        )
+
+        base_query = Location.query.filter(
+            Location.location_set_id == self.event.location_set_id,
+            Location.geom != None,  # noqa: E711
+        )
+        if station_type is not None:
+            typed_query = base_query.filter(Location.location_type_id == station_type.id)
+            query = typed_query if typed_query.first() is not None else base_query
+        else:
+            query = base_query
+
+        coordinates = self.coordinates
+
+        def haversine_meters(lat1, lon1, lat2, lon2):
+            rad = math.radians
+            dlat = rad(lat2 - lat1)
+            dlon = rad(lon2 - lon1)
+            a = math.sin(dlat / 2) ** 2 + math.cos(rad(lat1)) * math.cos(rad(lat2)) * math.sin(dlon / 2) ** 2
+            return 6371000.0 * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+        stations = []
+        for location in query:
+            point = to_shape(location.geom)
+            station = {
+                "id": location.id,
+                "code": location.code,
+                "name": location.name,
+                "lat": point.y,
+                "lon": point.x,
+            }
+            if coordinates is not None:
+                station["_dist"] = haversine_meters(coordinates[0], coordinates[1], point.y, point.x)
+            stations.append(station)
+
+        if coordinates is not None:
+            stations.sort(key=lambda s: s["_dist"])
+            for s in stations:
+                s.pop("_dist", None)
+
+        return stations[:limit]
+
     def has_image_data(self):
         return any(self.data.get(tag) for tag in self.form.get_image_fields())
 
