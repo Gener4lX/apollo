@@ -574,7 +574,7 @@
       <label for="proximityRadius" class="mr-2">{{ _('Allowed distance from polling station') }}</label>
       <select id="proximityRadius" class="custom-select custom-select-sm w-auto">
         {%- for meters in [50, 100, 200, 500, 1000] %}
-        <option value="{{ meters }}"{% if meters == 200 %} selected{% endif %}>{{ meters }} m</option>
+        <option value="{{ meters }}"{% if meters == 500 %} selected{% endif %}>{{ meters }} m</option>
         {%- endfor %}
       </select>
     </div>
