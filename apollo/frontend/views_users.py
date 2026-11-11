@@ -62,7 +62,7 @@ def task_list():
     session_id = session.get("_id")
 
     # extract the data from Redis
-    stringified_data = red.lrange(session_id, 0, -1)
+    stringified_data = red.lrange(session_id, 0, -1) if session_id else []
     raw_data = [json.loads(d) for d in stringified_data]
 
     tasks = {"results": raw_data}

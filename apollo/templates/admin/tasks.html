@@ -38,7 +38,9 @@
 {% endblock head %}
 {% block body %}
 <div id="app">
-  <component :is="currentComponent" :task-info="subtask" v-for="subtask in tasks" :key="subtask.id"></component>
+  <loader v-if="loading"></loader>
+  <default v-else-if="tasks.length === 0"></default>
+  <task-info v-else :task-info="subtask" v-for="subtask in tasks" :key="subtask.id"></task-info>
 </div>
 {% endblock %}
 {% block tail_js %}

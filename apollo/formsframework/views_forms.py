@@ -85,7 +85,12 @@ def survey_init():
             upload = UserUpload(deployment_id=g.deployment.id, upload_filename=filename, user_id=user.id)
             upload.save()
 
-            task_kwargs = {"event_id": form.data["event"], "form_id": form.data["form"], "upload_id": upload.id}
+            task_kwargs = {
+                "event_id": form.data["event"],
+                "form_id": form.data["form"],
+                "upload_id": upload.id,
+                "channel": session.get("_id"),
+            }
 
             init_survey_submissions.apply_async(kwargs=task_kwargs)
     else:

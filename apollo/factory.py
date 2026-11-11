@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import json
 import typing
 from importlib import import_module
 
@@ -6,7 +7,7 @@ import sentry_sdk
 from celery import Celery, Task
 from depot.manager import DepotManager
 from flask import Flask, Response, has_request_context, request
-from flask_babel import gettext as _
+from flask_babel import lazy_gettext as _
 from flask_login import current_user
 from flask_security import MailUtil, SQLAlchemyUserDatastore
 from flask_sslify import SSLify
@@ -211,9 +212,66 @@ def make_celery(app: Flask) -> Celery:
     """Initialize the celery application."""
 
     class FlaskTask(Task):
+        task_info = {}
+        track_started = True
+
         def __call__(self, *args: object, **kwargs: object) -> object:
+            self.task_info = {
+                "total_records": 0,
+                "processed_records": 0,
+                "error_records": 0,
+                "warning_records": 0,
+                "error_log": [],
+            }
             with app.app_context():
                 return self.run(*args, **kwargs)
+
+        def update_state(self, task_id=None, state=None, meta=None, **kwargs):
+            if isinstance(meta, dict):
+                self.task_info = meta
+            super().update_state(task_id=task_id, state=state, meta=meta, **kwargs)
+
+            channel = self.request.kwargs.get("channel") if self.request and self.request.kwargs else None
+            if channel is not None:
+                payload = {
+                    "id": task_id or self.request.id,
+                    "status": str(_("RUNNING")),
+                    "progress": self.task_info,
+                    "description": str(TASK_DESCRIPTIONS.get(self.name, _("Task"))),
+                }
+                red.publish(channel, json.dumps(payload, default=str))
+
+        def on_failure(self, exc, task_id, args, kwargs, einfo):
+            with app.app_context():
+                channel = kwargs.get("channel")
+                if channel is not None:
+                    payload = {
+                        "id": task_id,
+                        "status": str(_("FAILED")),
+                        "progress": getattr(self, "task_info", {}),
+                        "description": str(TASK_DESCRIPTIONS.get(self.name, _("Task"))),
+                        "quit": True,
+                    }
+                    serialized = json.dumps(payload, default=str)
+                    red.publish(channel, serialized)
+                    red.lpush(channel, serialized)
+                    red.expire(channel, app.config.get("TASK_STATUS_TTL", 86400))
+
+        def on_success(self, retval, task_id, args, kwargs):
+            with app.app_context():
+                channel = kwargs.get("channel")
+                if channel is not None:
+                    payload = {
+                        "id": task_id,
+                        "status": str(_("COMPLETED")),
+                        "progress": getattr(self, "task_info", {}),
+                        "description": str(TASK_DESCRIPTIONS.get(self.name, _("Task"))),
+                        "quit": True,
+                    }
+                    serialized = json.dumps(payload, default=str)
+                    red.publish(channel, serialized)
+                    red.lpush(channel, serialized)
+                    red.expire(channel, app.config.get("TASK_STATUS_TTL", 86400))
 
     celery = Celery(app.name, task_cls=FlaskTask)
     celery.config_from_object(app.config["CELERY"])

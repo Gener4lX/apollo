@@ -30,7 +30,7 @@ def init_submissions(self, event_id, form_id, role_id, location_type_id, channel
 
 
 @shared_task(bind=True)
-def init_survey_submissions(self, event_id, form_id, upload_id):
+def init_survey_submissions(self, event_id, form_id, upload_id, channel=None):
     """Initialize survey submissions in preparation to receive data."""
     event = models.Event.query.filter_by(id=event_id).first()
     form = models.Form.query.filter_by(id=form_id).first()
