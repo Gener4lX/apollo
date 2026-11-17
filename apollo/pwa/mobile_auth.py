@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """Helpers for signing observers in from the DEOW mobile app.
 
-The mobile app sends the observer's WordPress JWT (HS256) in the ``Authorization`` header. Apollo
-verifies the token offline with the same secret WordPress used to sign it, reads the observer's
-phone number (WordPress ``user_login``) from the token and matches it to participant phone contacts.
+The mobile app authenticates with ``DEOW_API_KEY`` and passes the logged-in observer's verified
+phone number (WordPress ``user.phone`` / ``user_login``). Apollo verifies the API key and matches
+the phone number to participant phone contacts in the current event.
 
-This module uses only the Python standard library so it can be unit tested in isolation without external dependencies.
+This module uses only the Python standard library so it can be unit tested in isolation.
 """
 import base64
 import hashlib
@@ -23,12 +23,38 @@ _LEEWAY_SECONDS = 60
 
 
 class MobileAuthError(Exception):
-    """Raised when the bearer token cannot be trusted."""
+    """Raised when the mobile sign-in request cannot be authenticated."""
 
     def __init__(self, message: str, status: int = 401):
         super().__init__(message)
         self.message = message
         self.status = status
+
+
+def verify_deow_api_key(provided_key: Optional[str], expected_key: Optional[str]) -> None:
+    """Verify the DEOW API key using constant-time comparison."""
+    expected = (expected_key or "").strip()
+    if not expected:
+        raise MobileAuthError("Mobile sign-in is not configured", status=503)
+
+    provided = (provided_key or "").strip()
+    if not provided:
+        raise MobileAuthError("Missing API key")
+
+    if not hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8")):
+        raise MobileAuthError("Invalid API key")
+
+
+def resolve_observer_phone(phone_value: Optional[str]) -> str:
+    """Validate and return the observer's phone number from the request."""
+    if not isinstance(phone_value, str) or not phone_value.strip():
+        raise MobileAuthError("Missing observer phone number")
+
+    cleaned = phone_value.strip()
+    if phone_match_key(cleaned) is None:
+        raise MobileAuthError("Invalid observer phone number")
+
+    return cleaned
 
 
 def extract_bearer_token(header_value: Optional[str]) -> str:
@@ -56,12 +82,7 @@ def _b64url_decode(data: str) -> bytes:
 
 
 def verify_wp_token(token: str, secret: str, issuer: str = "") -> Dict[str, Any]:
-    """Verify a WordPress-issued HS256 JWT and return its claims.
-
-    Only HS256 is accepted (never "none" or asymmetric algorithms) and the token must carry an expiry.
-    ``secret`` may contain multiple candidate secrets separated by ``||`` (for example when both
-    ``JWT_AUTH_SECRET_KEY`` and WordPress's ``wp_salt('auth')`` fallback are configured).
-    """
+    """Verify a WordPress-issued HS256 JWT and return its claims."""
     raw_candidates = [s.strip() for s in (secret or "").split("||") if s.strip()]
     candidates = []
     for cand in raw_candidates:
@@ -130,10 +151,8 @@ def phone_from_claims(claims: Dict[str, Any]) -> str:
     username = None
     data = claims.get("data")
     if isinstance(data, dict) and isinstance(data.get("user"), dict):
-        # layout produced by the JWT Authentication plugin
         username = data["user"].get("username")
     if not username:
-        # layout produced by the custom fallback generator
         username = claims.get("username")
 
     if not isinstance(username, str) or not username.strip():

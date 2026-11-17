@@ -13,6 +13,8 @@ try:
         mask_phone,
         phone_from_claims,
         phone_match_key,
+        resolve_observer_phone,
+        verify_deow_api_key,
         verify_wp_token,
     )
 except ModuleNotFoundError:
@@ -22,6 +24,8 @@ except ModuleNotFoundError:
         mask_phone,
         phone_from_claims,
         phone_match_key,
+        resolve_observer_phone,
+        verify_deow_api_key,
         verify_wp_token,
     )
 
@@ -143,6 +147,34 @@ class TestPhoneMatchKey(unittest.TestCase):
         self.assertEqual(mask_phone("0911223344"), "*******344")
         self.assertEqual(mask_phone("12"), "12")
         self.assertEqual(mask_phone(""), "")
+
+
+class TestVerifyDeowApiKey(unittest.TestCase):
+    def test_valid_api_key(self):
+        verify_deow_api_key("196bc9526f5771ab", "196bc9526f5771ab")
+
+    def test_not_configured(self):
+        with self.assertRaises(MobileAuthError) as ctx:
+            verify_deow_api_key("196bc9526f5771ab", "")
+        self.assertEqual(ctx.exception.status, 503)
+
+    def test_missing_or_wrong_api_key(self):
+        for provided in [None, "", "   ", "wrong-key"]:
+            with self.subTest(provided=provided):
+                with self.assertRaises(MobileAuthError):
+                    verify_deow_api_key(provided, "196bc9526f5771ab")
+
+
+class TestResolveObserverPhone(unittest.TestCase):
+    def test_valid_phone(self):
+        self.assertEqual(resolve_observer_phone(" 0920375216 "), "0920375216")
+        self.assertEqual(resolve_observer_phone("+251920375216"), "+251920375216")
+
+    def test_invalid_phone(self):
+        for val in [None, "", "   ", "12345"]:
+            with self.subTest(val=val):
+                with self.assertRaises(MobileAuthError):
+                    resolve_observer_phone(val)
 
 
 if __name__ == "__main__":

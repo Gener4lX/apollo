@@ -26,6 +26,8 @@ from apollo.pwa.mobile_auth import (
     mask_phone,
     phone_from_claims,
     phone_match_key,
+    resolve_observer_phone,
+    verify_deow_api_key,
     verify_wp_token,
 )
 
@@ -111,43 +113,35 @@ def _mobile_error(message, status=HTTPStatus.UNAUTHORIZED):
 
 @route(blueprint, "/mobile-auth")
 def mobile_auth():
-    """Sign an observer in from the DEOW mobile app.
+    """Sign an observer in from the DEOW mobile app using their verified phone number.
 
-    The app passes the observer's WordPress JWT as a bearer token (or ``token`` query param if a
-    reverse proxy strips the Authorization header). The observer's phone number (taken from the token)
-    is matched against participant phone contacts. If one participant matches they are signed in
-    directly, otherwise the observer chooses from the matching participants.
+    The app authenticates with ``X-API-Key`` (or ``api_key`` query param) matching ``DEOW_API_KEY``
+    and supplies the logged-in observer's phone number via ``X-Observer-Phone`` (or ``phone`` query
+    param). The phone number is normalized (last 9 digits) and matched against verified participant
+    phone contacts in the current event.
     """
     if not current_app.config.get("MOBILE_AUTH_ENABLED"):
         return _mobile_error(_("Mobile sign-in is not available."), HTTPStatus.NOT_FOUND)
 
-    auth_header = request.headers.get("Authorization")
-    if not auth_header and request.args.get("token"):
-        auth_header = f"Bearer {request.args.get('token')}"
+    expected_api_key = current_app.config.get("DEOW_API_KEY", "")
+    provided_api_key = request.headers.get("X-API-Key") or request.args.get("api_key")
+    raw_phone = request.headers.get("X-Observer-Phone") or request.args.get("phone")
 
     try:
-        token = extract_bearer_token(auth_header)
-        claims = verify_wp_token(
-            token, current_app.config["WP_JWT_SECRET"], current_app.config.get("WP_JWT_ISSUER", "")
-        )
-        phone = phone_from_claims(claims)
+        if expected_api_key:
+            verify_deow_api_key(provided_api_key, expected_api_key)
+            phone = resolve_observer_phone(raw_phone)
+        else:
+            auth_header = request.headers.get("Authorization")
+            if not auth_header and request.args.get("token"):
+                auth_header = f"Bearer {request.args.get('token')}"
+            token = extract_bearer_token(auth_header)
+            claims = verify_wp_token(
+                token, current_app.config["WP_JWT_SECRET"], current_app.config.get("WP_JWT_ISSUER", "")
+            )
+            phone = phone_from_claims(claims)
     except MobileAuthError as error:
-        token_preview = (auth_header or "")[-16:]
-        payload_preview = ""
-        try:
-            parts = (auth_header or "").split(".")
-            if len(parts) == 3:
-                import base64
-                p = parts[1] + "=" * ((4 - len(parts[1]) % 4) % 4)
-                payload_preview = base64.urlsafe_b64decode(p.encode("ascii")).decode("utf-8", errors="ignore")
-        except Exception:
-            pass
-        logger.warning(
-            "Mobile sign-in rejected: %s (tail=%s, payload=%s)",
-            error.message,
-            token_preview,
-            payload_preview,
-        )
+        logger.warning("Mobile sign-in rejected: %s", error.message)
         return _mobile_error(
             _("Could not verify your sign-in (%(reason)s). Please log in to the DEOW app again.", reason=error.message),
             error.status,
