@@ -244,22 +244,27 @@ def _get_form_data(participant: Participant):
         .join(FormAlias, Submission.form_id == FormAlias.id)
     )
 
-    # get checklist and survey forms based on the available submissions
+    # get checklist and survey forms based on the available submissions and event forms
     non_incident_forms = participant_submissions.with_entities(FormAlias).distinct(FormAlias.id)
-    checklist_forms = non_incident_forms.filter(FormAlias.form_type == "CHECKLIST", FormAlias.is_hidden == False).all()  # noqa
-    if not checklist_forms:
-        checklist_forms = (
-            Form.query.join(EventAlias, Form.events)
-            .filter(
-                EventAlias.participant_set_id == participant.participant_set_id,
-                EventAlias.is_hidden == False,  # noqa
-                Form.form_type == "CHECKLIST",
-                Form.is_hidden == False,  # noqa
-            )
-            .with_entities(Form)
-            .order_by(Form.name, Form.id)
-            .all()
+    sub_checklist_forms = non_incident_forms.filter(FormAlias.form_type == "CHECKLIST", FormAlias.is_hidden == False).all()  # noqa
+    event_checklist_forms = (
+        Form.query.join(EventAlias, Form.events)
+        .filter(
+            EventAlias.participant_set_id == participant.participant_set_id,
+            EventAlias.is_hidden == False,  # noqa
+            Form.form_type == "CHECKLIST",
+            Form.is_hidden == False,  # noqa
         )
+        .with_entities(Form)
+        .order_by(Form.name, Form.id)
+        .all()
+    )
+    seen_form_ids = set()
+    checklist_forms = []
+    for f in sub_checklist_forms + event_checklist_forms:
+        if f.id not in seen_form_ids:
+            seen_form_ids.add(f.id)
+            checklist_forms.append(f)
     survey_forms = non_incident_forms.filter(FormAlias.form_type == "SURVEY", FormAlias.is_hidden == False).all()  # noqa
 
     # get form serial numbers
@@ -309,9 +314,9 @@ def _get_existing_submissions(participant: Participant):
         result.append(
             {
                 "form": sub.form_id,
-                "type": sub.form.form_type,
+                "type": getattr(sub.form.form_type, "code", str(sub.form.form_type)),
                 "serial": sub.serial_no,
-                "data": sub.data or {},
+                "data": dict(sub.data) if sub.data else {},
                 "uuid": str(sub.uuid) if sub.uuid else None,
                 "updated": sub.participant_updated.isoformat() if sub.participant_updated else None,
             }
@@ -336,7 +341,10 @@ def get_forms():
         return response
 
     forms, serials = _get_form_data(participant)
-    existing_submissions = _get_existing_submissions(participant)
+    try:
+        existing_submissions = _get_existing_submissions(participant)
+    except Exception:
+        existing_submissions = []
 
     form_data = FormSchema(many=True).dump(forms)
 

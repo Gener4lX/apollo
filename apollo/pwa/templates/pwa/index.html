@@ -1228,8 +1228,10 @@
           // the DEOW mobile app always needs the GPS location
           this.participant.allowLocationAccess = this.mobileMode ? true : this.allowLocationAccess;
           this.saveParticipantToDatabase(participant);
-          this.refreshForms(false);
+          this.loadFormsFromDatabase();
           this.loadSubmissionsFromDatabase();
+          this.loadSerialCountsFromDatabase();
+          this.refreshForms(false);
         },
         formsLoaded(forms) {
           let formsWithParticipantIds = forms.map(form => Object.assign({}, form, {participant_id: this.participant.participant_id}));
