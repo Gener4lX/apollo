@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="{{ g.locale.language }}" dir="{{ g.locale.text_direction }}">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="{{ url_for('pwa.static', filename='vendor/bootstrap/css/bootstrap.min.css') }}">
+  <title>{{ page_title }}</title>
+</head>
+<body class="bg-light">
+  <main class="container py-5">
+    <div class="card shadow-sm">
+      <div class="card-body text-center">
+        <h5 class="card-title">{{ _('Unable to open reports') }}</h5>
+        <p class="card-text">{{ message }}</p>
+        <button type="button" class="btn btn-primary" id="retry-button">{{ _('Try again') }}</button>
+      </div>
+    </div>
+  </main>
+  <script>
+    document.getElementById('retry-button').addEventListener('click', function () {
+      if (window.ReactNativeWebView) {
+        window.ReactNativeWebView.postMessage('retry');
+      } else {
+        window.location.reload();
+      }
+    });
+  </script>
+</body>
+</html>

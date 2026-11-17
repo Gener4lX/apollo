@@ -241,5 +241,15 @@ JWT_ERROR_MESSAGE_KEY = "message"
 JWT_COOKIE_SECURE = SESSION_COOKIE_SECURE
 JWT_ACCESS_COOKIE_PATH = "/api"
 
+# Mobile app (DEOW) sign-in settings
+# The DEOW mobile app opens /pwa/mobile-auth with the observer's WordPress JWT in the
+# Authorization header. Apollo verifies the token offline (no call to WordPress) using the
+# same secret WordPress signs its tokens with (JWT_AUTH_SECRET_KEY in wp-config.php).
+# Keep this value secret. Leave it empty to disable mobile sign-in.
+WP_JWT_SECRET = config("WP_JWT_SECRET", default="")
+# Optional: when set, the token's "iss" claim must match (e.g. https://deow-cecoe.org)
+WP_JWT_ISSUER = config("WP_JWT_ISSUER", default="")
+MOBILE_AUTH_ENABLED = config("MOBILE_AUTH_ENABLED", cast=config.boolean, default=True) and bool(WP_JWT_SECRET)
+
 # PWA WEB-UI Settings
 ALLOW_IMAGE_GALLERY_UPLOAD = config("ALLOW_IMAGE_GALLERY_UPLOAD", cast=config.boolean, default=False)

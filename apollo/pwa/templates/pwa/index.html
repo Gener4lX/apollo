@@ -34,15 +34,16 @@
       <div class="row h-75 align-items-center">
         <div class="col-sm-8 offset-sm-2 mt-6">
           <transition mode="out-in" enter-active-class="animate__animated animate__fadeIn" leave-active-class="animate__animated animate__fadeOut">
-            <login-form v-if="participant === null" @authenticated="authenticationSuccess" :navigator-online="navigatorOnline"></login-form>
+            <login-form v-if="participant === null && !mobileMode" @authenticated="authenticationSuccess" :navigator-online="navigatorOnline"></login-form>
+            <participant-picker v-else-if="participant === null" :candidates="candidates" :busy="selecting" @selected="selectParticipant"></participant-picker>
             <div v-else>
               <div class="mb-3">
-                <participant-info :global-status="globalStatus()" :participant="participant" :pending-submissions="pendingSubmissions" @logged-out="loggedOut" @toggle-location-access="locationAccessToggled" ></participant-info>
+                <participant-info :global-status="globalStatus()" :participant="participant" :pending-submissions="pendingSubmissions" :mobile-mode="mobileMode" :can-switch="candidates.length > 1" @logged-out="loggedOut" @switch-participant="switchParticipant" @toggle-location-access="locationAccessToggled" ></participant-info>
               </div>
               <div class="mb-3">
                 <transition mode="out-in" enter-active-class="animate__animated animate__fadeIn" leave-active-class="animate__animated animate__fadeOut">
                   <form-list v-if="currentForm === null && currentSubmission === null" :forms="forms" :navigator-online="navigatorOnline" :serial-counts="serialCounts" :submission-groups="groupedSubmissions" :submissions="submissions" :syncing-submission="syncingSubmission" @load-forms="refreshForms" @unauthorized="loggedOut" @edit-submission="editSubmission" @reload-data="reloadStoredData"></form-list>
-                  <submission-editor v-else-if="currentForm !== null && currentSubmission !== null" :form="currentForm" :navigator-online="navigatorOnline" :participant_id="participant.participant_id" :submission="currentSubmission" :is-location-access-allowed="participant.allowLocationAccess" @save-submission="saveSubmissionToDatabase" @post-submission="postSubmission" @clear-form="clearCurrentForm"></submission-editor>
+                  <submission-editor v-else-if="currentForm !== null && currentSubmission !== null" :form="currentForm" :navigator-online="navigatorOnline" :participant_id="participant.participant_id" :submission="currentSubmission" :is-location-access-allowed="participant.allowLocationAccess" :require-location="mobileMode" @save-submission="saveSubmissionToDatabase" @post-submission="postSubmission" @clear-form="clearCurrentForm"></submission-editor>
                 </transition>
               </div>
             </div>
@@ -109,10 +110,13 @@
               <div class="col-4"><strong>{{ _('Location') }}:</strong></div>
               <div class="col">[[ participant.location ]]</div>
             </div>
-            <div class="row mb-3">
+            <div class="row mb-3" v-if="!mobileMode">
               <div class="col">{{ _('If this is not correct, please') }} <button @click="logout" class="btn btn-outline-dark">{{ _('click here') }}</button></div>
             </div>
-            <div class="row mb-3">
+            <div class="row mb-3" v-if="mobileMode && canSwitch">
+              <div class="col"><button @click="$emit('switch-participant')" class="btn btn-outline-dark">{{ _('Switch participant') }}</button></div>
+            </div>
+            <div class="row mb-3" v-if="!mobileMode">
               <div class="col">
                 <div class="form-check">
                   <input type="checkbox" id="location-access-toggle" class="form-check-input" :checked="participant.allowLocationAccess" @change="toggleLocationAccess">
@@ -120,11 +124,39 @@
                 </div>
               </div>
             </div>
+            <div class="row mb-3" v-if="mobileMode">
+              <div class="col"><div class="alert alert-info mb-0" role="alert">{{ _('Your GPS location is required to send a report. Please keep GPS turned on.') }}</div></div>
+            </div>
             <div class="row mb-3" v-if="globalStatus > 0">
               <div class="col">
                 <div class="alert" :class="statusClass" role="alert">[[ statusMessage ]]</div>
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </template>
+  <template id="participant-picker">
+    <div class="row">
+      <div class="col">
+        <div class="card shadow-sm mt-3">
+          <h5 class="card-header">{{ _('Select participant') }}</h5>
+          <div class="card-body">
+            <p v-if="candidates.length === 0" class="mb-0">{{ _('Your session has expired. Please close this screen and open Report again.') }}</p>
+            <template v-else>
+              <p>{{ _('Select the participant ID you want to report for.') }}</p>
+              <div class="list-group">
+                <button type="button" class="list-group-item list-group-item-action" v-for="candidate in candidates" :key="candidate.participant_id" :disabled="busy" @click="$emit('selected', candidate)">
+                  <div class="d-flex justify-content-between align-items-center">
+                    <strong>[[ candidate.participant_id ]]</strong>
+                    <small class="text-muted">[[ candidate.events.join(', ') ]]</small>
+                  </div>
+                  <div>[[ candidate.full_name ]]</div>
+                  <small class="text-muted" v-if="candidate.location">[[ candidate.location ]]</small>
+                </button>
+              </div>
+            </template>
           </div>
         </div>
       </div>
@@ -413,12 +445,22 @@
       list: "{{ url_for('participants.get_forms') }}",
       login: "{{ url_for('participants.login') }}",
       logout: "{{ url_for('participants.logout') }}",
+      mobileSelect: "{{ url_for('pwa.mobile_select') }}",
       qaStatus: "{{ url_for('submissions.checklist_qa_status', uuid='') }}",
       submit: "{{ url_for('submissions.submission') }}",
       versionCheck: "{{ url_for('pwa.version_check') }}",
     };
     const client = new APIClient(endpoints);
 
+    // DEOW mobile app support: when the page is opened by the mobile app (/pwa/mobile-auth) the server
+    // supplies the signed-in participant and/or the participants the observer can choose from.
+    const mobileBootstrap = {{ mobile_bootstrap|tojson }};
+    const isMobileMode = mobileBootstrap !== null;
+    const postToMobileApp = function (message) {
+      if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+        window.ReactNativeWebView.postMessage(message);
+      }
+    };
     // database setup
     const db = new Dexie('apollo');
     db.version(5).stores({
@@ -685,8 +727,14 @@
           this.$emit('logged-out');
         }
       },
-      props: ['forms', 'globalStatus', 'participant', 'pendingSubmissions'],
+      props: ['canSwitch', 'forms', 'globalStatus', 'mobileMode', 'participant', 'pendingSubmissions'],
       template: '#participant-info'
+    });
+
+    // participant picker component (DEOW mobile app only)
+    Vue.component('participant-picker', {
+      props: ['busy', 'candidates'],
+      template: '#participant-picker'
     });
 
     // form list component
@@ -911,7 +959,7 @@
           instance.images[field.tag] = imageData;
           instance.markUpdated();
         },
-        async updateSubmission(callback, silent) {
+        async updateSubmission(callback, silent, requireLocation = false) {
           let instance = this;
 
           // clear out keys that have empty string values
@@ -921,11 +969,27 @@
           if (instance.images !== {})
             instance.submission.images = instance.images;
 
-          if (instance.canRetrieveLocation && instance.isLocationAccessAllowed) {
+          // in the DEOW mobile app a GPS location must be captured before a report is sent
+          let locationRequired = !!(requireLocation && instance.requireLocation);
+          let showLocationRequired = () => {
+            Notiflix.Report.Failure(
+              '{{ _("GPS location required") }}',
+              '{{ _("Your location could not be retrieved. Turn on GPS, allow location access for the DEOW app, and try again.") }}',
+              '{{ _("OK") }}',
+            );
+          };
+
+          if (instance.canRetrieveLocation && (instance.isLocationAccessAllowed || instance.requireLocation)) {
             // geolocation is supported
+            if (locationRequired)
+              Notiflix.Loading.Standard('{{ _("Getting your location...") }}');
+
             navigator.geolocation.getCurrentPosition(
               // success callback
               position => {
+                if (locationRequired)
+                  Notiflix.Loading.Remove();
+
                 let location = [position.coords.longitude, position.coords.latitude];
                 instance.submission.data.location = location;
                 instance.location = location;
@@ -935,6 +999,12 @@
 
               // error callback
               () => {
+                if (locationRequired) {
+                  Notiflix.Loading.Remove();
+                  showLocationRequired();
+                  return;
+                }
+
                 if (instance.isLocationAccessAllowed && !silent)
                   Notiflix.Notify.Warning('{{ _("Could not retrieve your location") }}', 2000);
                 callback();
@@ -947,6 +1017,9 @@
                 maximumAge: 0
               }
             );
+          } else if (locationRequired) {
+            // geolocation isn't supported but is required
+            showLocationRequired();
           } else {
             // geolocation isn't supported. just call the callback
             callback();
@@ -978,7 +1051,7 @@
 
           this.updateSubmission(() => {
             instance.$emit('post-submission', instance.submission);
-          });
+          }, false, true);
         },
         clearData(group) {
           let instance = this;
@@ -1025,7 +1098,7 @@
             }
           }, 60 * 1000);
       },
-      props: ['isLocationAccessAllowed', 'form', 'navigatorOnline', 'participant_id', 'submission', 'syncingSubmission'],
+      props: ['isLocationAccessAllowed', 'form', 'navigatorOnline', 'participant_id', 'requireLocation', 'submission', 'syncingSubmission'],
       template: '#submission-editor',
     });
 
@@ -1067,6 +1140,7 @@
         }
       },
       data: {
+        candidates: isMobileMode ? (mobileBootstrap.candidates || []) : [],
         checkQAStatusIntervalHandle: null,
         commit: '{{ commit }}',
         commitCheckIntervalHandle: null,
@@ -1074,8 +1148,10 @@
         currentSubmission: null,
         forms: [],
         formSyncIntervalHandle: null,
+        mobileMode: isMobileMode,
         navigatorOnline: navigator.onLine,
         participant: null,
+        selecting: false,
         serialCounts: null,
         submissions: [],
         submissionSyncIntervalHandle: null,
@@ -1144,7 +1220,8 @@
         },
         authenticationSuccess(participant) {
           this.participant = participant;
-          this.participant.allowLocationAccess = this.allowLocationAccess;
+          // the DEOW mobile app always needs the GPS location
+          this.participant.allowLocationAccess = this.mobileMode ? true : this.allowLocationAccess;
           this.saveParticipantToDatabase(participant);
           this.refreshForms(false);
           this.loadSubmissionsFromDatabase();
@@ -1239,12 +1316,65 @@
           ));
         },
         loggedOut() {
+          if (this.mobileMode) {
+            // the signed-in participant is managed by the app; just go back to the participant list
+            this.switchParticipant();
+            return;
+          }
+
           client.logout(Cookie.get('csrf_access_token'));
           this.participant = null;
           this.currentForm = null;
           this.currentSubmission = null;
           this.forms = [];
           this.submissions = [];
+        },
+        switchParticipant() {
+          this.participant = null;
+          this.currentForm = null;
+          this.currentSubmission = null;
+          this.forms = [];
+          this.submissions = [];
+        },
+        async selectParticipant(candidate) {
+          let instance = this;
+          instance.selecting = true;
+          try {
+            let response = await fetch(endpoints.mobileSelect, {
+              body: JSON.stringify({participant_id: candidate.participant_id}),
+              credentials: 'same-origin',
+              headers: {'Content-Type': 'application/json'},
+              method: 'POST'
+            });
+
+            if (response.status === 200) {
+              let data = await response.json();
+              let participant = data.data.participant;
+              participant.lastLogin = new Date();
+              instance.authenticationSuccess(participant);
+            } else if (response.status === 401) {
+              Notiflix.Report.Warning(
+                '{{ _("Session expired") }}',
+                '{{ _("Please close this screen and open Report again.") }}',
+                '{{ _("OK") }}',
+              );
+              postToMobileApp('session-expired');
+            } else {
+              Notiflix.Report.Failure(
+                '{{ _("Error") }}',
+                '{{ _("Could not select this participant. Please try again.") }}',
+                '{{ _("OK") }}',
+              );
+            }
+          } catch (error) {
+            Notiflix.Report.Failure(
+              '{{ _("Error") }}',
+              '{{ _("Could not select this participant. Might you be offline?") }}',
+              '{{ _("OK") }}',
+            );
+          }
+
+          instance.selecting = false;
         },
         newSubmission(form) {
           let instance = this;
@@ -1323,6 +1453,18 @@
         },
         async postSubmission(submission, single = true) {
           let instance = this;
+
+          // the DEOW mobile app never sends a report without a GPS location
+          if (instance.mobileMode && !(submission.data && submission.data.location)) {
+            if (single)
+              Notiflix.Report.Failure(
+                '{{ _("GPS location required") }}',
+                '{{ _("Your location could not be retrieved. Turn on GPS, allow location access for the DEOW app, and try again.") }}',
+                '{{ _("OK") }}',
+              );
+            return;
+          }
+
           if (!instance.navigatorOnline) {
             if (single)
               Notiflix.Report.Warning(
@@ -1463,7 +1605,15 @@
       mounted() {
         let instance = this;
         instance.loadParticipantFromDatabase(() => {
-          if (instance.participant !== null) {
+          if (instance.mobileMode) {
+            // the server decides who is signed in when running inside the DEOW mobile app
+            instance.participant = null;
+            let bootstrapParticipant = mobileBootstrap.participant;
+            if (bootstrapParticipant) {
+              bootstrapParticipant.lastLogin = new Date();
+              instance.authenticationSuccess(bootstrapParticipant);
+            }
+          } else if (instance.participant !== null) {
             instance.participant.allowLocationAccess = instance.participant.allowLocationAccess || false;
             instance.reloadStoredData();
           }
