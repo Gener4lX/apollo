@@ -176,14 +176,6 @@ def submission():
     payload = request_data.get("data")
     participant_uuid = get_jwt_identity()
 
-    form = filter_form(form_id)
-    if form is None:
-        response_body = {"message": gettext("Invalid form"), "status": "error"}
-
-        response = jsonify(response_body)
-        response.status_code = HTTPStatus.BAD_REQUEST
-        return response
-
     try:
         participant = Participant.query.filter_by(uuid=participant_uuid).one()
     except NoResultFound:
@@ -193,8 +185,39 @@ def submission():
         response.status_code = HTTPStatus.BAD_REQUEST
         return response
 
-    participant = filter_participants(form, participant.participant_id)
-    if participant is None:
+    form = filter_form(form_id)
+    if form is None and form_id:
+        form = (
+            Form.query.join(Event, Form.events)
+            .filter(
+                Form.id == form_id,
+                Form.is_hidden == False,  # noqa
+                Event.participant_set_id == participant.participant_set_id,
+                Event.is_hidden == False,  # noqa
+            )
+            .first()
+        )
+    if form is None:
+        response_body = {"message": gettext("Invalid form"), "status": "error"}
+
+        response = jsonify(response_body)
+        response.status_code = HTTPStatus.BAD_REQUEST
+        return response
+
+    # Ensure the participant belongs to an active event that uses this form
+    current_event = getattr(g, "event", Event.default())
+    current_events = Event.overlapping_events(current_event)
+    event_ids = current_events.with_entities(Event.id)
+
+    has_event_for_form = (
+        Event.query.filter(
+            Event.forms.contains(form),
+            Event.participant_set_id == participant.participant_set_id,
+            Event.is_hidden == False,  # noqa
+        ).first()
+        is not None
+    )
+    if not has_event_for_form:
         response_body = {"message": gettext("Invalid participant"), "status": "error"}
 
         response = jsonify(response_body)
@@ -217,29 +240,95 @@ def submission():
         response.status_code = HTTPStatus.BAD_REQUEST
         return response
 
-    current_event = getattr(g, "event", Event.default())
-    current_events = Event.overlapping_events(current_event)
-    event_ids = current_events.with_entities(Event.id)
-
     if form.form_type == "CHECKLIST":
         # when searching for the submission, take into cognisance
         # that the submission may be in one of several concurrent
-        # events
-        submission = Submission.query.filter(
-            Submission.participant == participant,
-            Submission.form == form,
-            Submission.submission_type == "O",
-            Submission.event_id.in_(event_ids),
-        ).first()
+        # events (or the participant's assigned event for this form)
+        submission = (
+            Submission.query.filter(
+                Submission.participant_id == participant.id,
+                Submission.form_id == form.id,
+                Submission.submission_type == "O",
+                Submission.event_id.in_(event_ids),
+            )
+            .order_by(Submission.id.desc())
+            .first()
+        )
+        if submission is None:
+            submission = (
+                Submission.query.filter(
+                    Submission.participant_id == participant.id,
+                    Submission.form_id == form.id,
+                    Submission.submission_type == "O",
+                )
+                .order_by(Submission.id.desc())
+                .first()
+            )
+        if submission is None and participant.location is not None:
+            event = (
+                Event.query.filter(
+                    Event.forms.contains(form),
+                    Event.participant_set_id == participant.participant_set_id,
+                    Event.is_hidden == False,  # noqa
+                )
+                .order_by(Event.end.desc(), Event.id.desc())
+                .first()
+            )
+            if event is not None:
+                submission = Submission(
+                    submission_type="O",
+                    form=form,
+                    participant=participant,
+                    location=participant.location,
+                    created=current_timestamp(),
+                    event=event,
+                    deployment_id=event.deployment_id,
+                    data={},
+                )
+                submission.save()
+                master_sub = Submission.query.filter_by(
+                    form_id=form.id,
+                    participant_id=None,
+                    location_id=participant.location.id,
+                    deployment_id=event.deployment_id,
+                    event_id=event.id,
+                    submission_type="M",
+                ).first()
+                if master_sub is None:
+                    master_sub = Submission(
+                        form_id=form.id,
+                        participant_id=None,
+                        location_id=participant.location.id,
+                        deployment_id=event.deployment_id,
+                        event_id=event.id,
+                        submission_type="M",
+                        data={},
+                    )
+                    master_sub.save()
 
     elif form.form_type == "SURVEY":
-        submission = Submission.query.filter(
-            Submission.participant == participant,
-            Submission.form == form,
-            Submission.submission_type == "O",
-            Submission.serial_no == form_serial,
-            Submission.event_id.in_(event_ids),
-        ).first()
+        submission = (
+            Submission.query.filter(
+                Submission.participant_id == participant.id,
+                Submission.form_id == form.id,
+                Submission.submission_type == "O",
+                Submission.serial_no == form_serial,
+                Submission.event_id.in_(event_ids),
+            )
+            .order_by(Submission.id.desc())
+            .first()
+        )
+        if submission is None:
+            submission = (
+                Submission.query.filter(
+                    Submission.participant_id == participant.id,
+                    Submission.form_id == form.id,
+                    Submission.submission_type == "O",
+                    Submission.serial_no == form_serial,
+                )
+                .order_by(Submission.id.desc())
+                .first()
+            )
     else:
         # the submission event is determined by taking the intersection
         # of form events, participant events and concurrent events

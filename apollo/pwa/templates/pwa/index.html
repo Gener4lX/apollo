@@ -147,7 +147,7 @@
             <template v-else>
               <p>{{ _('Select the participant ID you want to report for.') }}</p>
               <div class="list-group">
-                <button type="button" class="list-group-item list-group-item-action" v-for="candidate in candidates" :key="candidate.participant_id" :disabled="busy" @click="$emit('selected', candidate)">
+                <button type="button" class="list-group-item list-group-item-action" v-for="candidate in candidates" :key="candidate.id || candidate.participant_id" :disabled="busy" @click="$emit('selected', candidate)">
                   <div class="d-flex justify-content-between align-items-center">
                     <strong>[[ candidate.participant_id ]]</strong>
                     <small class="text-muted">[[ candidate.events.join(', ') ]]</small>
@@ -336,6 +336,7 @@
   <script src="{{ url_for('pwa.static', filename='vendor/vue/vue.min.js') }}"></script>
   <script src="{{ url_for('pwa.static', filename='js/app.js') }}"></script>
   <script src="{{ url_for('pwa.static', filename='js/client.js') }}"></script>
+  <script id="mobile-bootstrap-data" type="application/json">{{ mobile_bootstrap|tojson }}</script>
   <script>
     {% if trace_errors %}
     Sentry.init({
@@ -454,7 +455,8 @@
 
     // DEOW mobile app support: when the page is opened by the mobile app (/pwa/mobile-auth) the server
     // supplies the signed-in participant and/or the participants the observer can choose from.
-    const mobileBootstrap = {{ mobile_bootstrap|tojson }};
+    const mobileBootstrapEl = document.getElementById('mobile-bootstrap-data');
+    const mobileBootstrap = mobileBootstrapEl ? JSON.parse(mobileBootstrapEl.textContent) : null;
     const isMobileMode = mobileBootstrap !== null;
     const postToMobileApp = function (message) {
       if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
@@ -462,9 +464,9 @@
       }
     };
     // database setup
-    const db = new Dexie('apollo');
-    db.version(5).stores({
-      forms: 'id, participant_id',
+    const db = new Dexie('apollo_v6');
+    db.version(1).stores({
+      forms: '[participant_id+id], id, participant_id',
       participants: 'participant_id, lastLogin',
       serials: '[participant_id+form+serial], [participant_id+form], form, participant_id, serial',
       submissions: '++id, form, participant_id, passedQA, posted, queued_at, uuid, [participant_id+id], [participant_id+form], [participant_id+form+id], [participant_id+queued_at], [participant_id+passedQA]'
@@ -1185,6 +1187,9 @@
               result.result.then(data => {
                 instance.formsLoaded(data.data.forms);
                 instance.serialsLoaded(data.data.serials);
+                if (data.data.submissions) {
+                  instance.serverSubmissionsLoaded(data.data.submissions);
+                }
               });
             } else {
               instance.$emit('unauthorized');
@@ -1242,21 +1247,90 @@
             return acc;
           }, {});
         },
+        serverSubmissionsLoaded(serverSubmissions) {
+          let instance = this;
+          if (!instance.participant || !Array.isArray(serverSubmissions) || serverSubmissions.length === 0)
+            return;
+
+          let currentPid = instance.participant.participant_id;
+          instance._loadCollectionFromDatabase(db.submissions, localSubs => {
+            let toSave = [];
+            serverSubmissions.forEach(srv => {
+              let existing = localSubs.find(
+                s => s.form === srv.form && (s.serial || null) === (srv.serial || null)
+              );
+              let srvUpdated = srv.updated ? new Date(srv.updated) : new Date();
+              if (!existing) {
+                let formObj = instance.forms.find(f => f.id === srv.form);
+                let dataCopy = Object.assign({}, srv.data || {});
+                if (formObj && formObj.data && formObj.data.groups) {
+                  formObj.data.groups.forEach(group => {
+                    group.fields.forEach(field => {
+                      if (field.type === 'multiselect' && !Array.isArray(dataCopy[field.tag]))
+                        dataCopy[field.tag] = [];
+                    });
+                  });
+                }
+                toSave.push({
+                  created: srvUpdated,
+                  data: dataCopy,
+                  errorFields: new Set(),
+                  form: srv.form,
+                  images: {},
+                  participant_id: currentPid,
+                  passedQA: true,
+                  posted: srvUpdated,
+                  postedFields: null,
+                  queued_at: null,
+                  serial: srv.serial,
+                  status: 'ok',
+                  type: srv.type,
+                  updated: srvUpdated,
+                  uuid: srv.uuid
+                });
+              } else if (!existing.queued_at && srv.data && Object.keys(srv.data).length > 0) {
+                // Merge server fields not yet present locally, or update if server has newer data
+                existing.data = Object.assign({}, srv.data, existing.data || {});
+                if (!existing.posted)
+                  existing.posted = srvUpdated;
+                if (!existing.updated)
+                  existing.updated = srvUpdated;
+                if (srv.uuid && !existing.uuid)
+                  existing.uuid = srv.uuid;
+                toSave.push(existing);
+              }
+            });
+
+            if (toSave.length > 0) {
+              db.transaction('rw', db.submissions, () => {
+                db.submissions.bulkPut(toSave);
+              }).then(() => {
+                instance.loadSubmissionsFromDatabase();
+              });
+            }
+          });
+        },
         saveFormstoDatabase(forms) {
           let instance = this;
-          let unusedFormIds;
+          let currentPid = instance.participant ? instance.participant.participant_id : null;
+          let unusedFormKeys;
           db.transaction('rw', db.forms, db.submissions, () => {
             let formIds = new Set(forms.map(form => form.id));
             instance._loadCollectionFromDatabase(db.forms, dbForms => {
-              unusedFormIds = dbForms.filter(form => !formIds.has(form.id)).map(form => form.id);
+              unusedFormKeys = dbForms
+                .filter(form => !formIds.has(form.id))
+                .map(form => [currentPid, form.id]);
 
               db.forms.bulkPut(forms);
-              db.forms.bulkDelete(unusedFormIds);
+              if (unusedFormKeys.length > 0)
+                db.forms.bulkDelete(unusedFormKeys);
 
+              let unusedIds = new Set(dbForms.filter(form => !formIds.has(form.id)).map(form => form.id));
               instance._loadCollectionFromDatabase(db.submissions, subs => {
-                let subIdsToDelete = subs.filter(s => unusedFormIds.includes(s.form)).map(s => s.id);
+                let subIdsToDelete = subs.filter(s => unusedIds.has(s.form)).map(s => s.id);
 
-                db.submissions.bulkDelete(subIdsToDelete);
+                if (subIdsToDelete.length > 0)
+                  db.submissions.bulkDelete(subIdsToDelete);
               });
             });
           }).catch(() => Notiflix.Report.Failure(
@@ -1341,7 +1415,7 @@
           instance.selecting = true;
           try {
             let response = await fetch(endpoints.mobileSelect, {
-              body: JSON.stringify({participant_id: candidate.participant_id}),
+              body: JSON.stringify({id: candidate.id, participant_id: candidate.participant_id}),
               credentials: 'same-origin',
               headers: {'Content-Type': 'application/json'},
               method: 'POST'

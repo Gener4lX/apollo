@@ -61,6 +61,7 @@ def index():
 def _participant_payload(participant):
     """Same shape as the participant object returned by the participant login API."""
     return {
+        "id": participant.id,
         "events": [ev.id for ev in participant.participant_set.events],
         "first_name": participant.first_name,
         "other_names": participant.other_names,
@@ -74,6 +75,7 @@ def _participant_payload(participant):
 
 def _candidate_summary(participant):
     return {
+        "id": participant.id,
         "participant_id": participant.participant_id,
         "full_name": participant.full_name,
         "location": participant.location.name if participant.location else "",
@@ -90,19 +92,20 @@ def _find_participants_by_phone(match_key):
         .join(PhoneContact, PhoneContact.participant_id == Participant.id)
         .with_entities(Participant)
         .filter(PhoneContact.verified.is_(True), func.right(digits, 9) == match_key)
-        .order_by(Participant.participant_id)
+        .order_by(Participant.participant_id, Participant.id.desc())
         .all()
     )
 
-    # a participant set can belong to several overlapping events; remove duplicates
-    seen = set()
-    participants = []
+    # Deduplicate by (participant_set_id, participant_id) and prefer a record that has submissions
+    by_key = {}
     for participant in rows:
-        if participant.id not in seen:
-            seen.add(participant.id)
-            participants.append(participant)
+        key = (participant.participant_set_id, participant.participant_id)
+        if key not in by_key:
+            by_key[key] = participant
+        elif not by_key[key].submissions and participant.submissions:
+            by_key[key] = participant
 
-    return participants
+    return list(by_key.values())
 
 
 def _mobile_error(message, status=HTTPStatus.UNAUTHORIZED):
@@ -180,12 +183,18 @@ def mobile_select():
     """Sign in as one of the participants matched in :func:`mobile_auth`."""
     candidate_ids = session.get(MOBILE_CANDIDATES_KEY) or []
     payload = request.get_json(silent=True) or {}
+    participant_pk = payload.get("id")
     participant_id = payload.get("participant_id")
 
     participant = None
-    if candidate_ids and participant_id:
+    if candidate_ids and participant_pk:
+        participant = Participant.query.filter(
+            Participant.id.in_(candidate_ids), Participant.id == participant_pk
+        ).first()
+    if participant is None and candidate_ids and participant_id:
         participant = (
             Participant.query.filter(Participant.id.in_(candidate_ids), Participant.participant_id == participant_id)
+            .order_by(Participant.id.desc())
             .first()
         )
 

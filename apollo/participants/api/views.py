@@ -246,8 +246,21 @@ def _get_form_data(participant: Participant):
 
     # get checklist and survey forms based on the available submissions
     non_incident_forms = participant_submissions.with_entities(FormAlias).distinct(FormAlias.id)
-    checklist_forms = non_incident_forms.filter(FormAlias.form_type == "CHECKLIST", FormAlias.is_hidden == False)  # noqa
-    survey_forms = non_incident_forms.filter(FormAlias.form_type == "SURVEY", FormAlias.is_hidden == False)  # noqa
+    checklist_forms = non_incident_forms.filter(FormAlias.form_type == "CHECKLIST", FormAlias.is_hidden == False).all()  # noqa
+    if not checklist_forms:
+        checklist_forms = (
+            Form.query.join(EventAlias, Form.events)
+            .filter(
+                EventAlias.participant_set_id == participant.participant_set_id,
+                EventAlias.is_hidden == False,  # noqa
+                Form.form_type == "CHECKLIST",
+                Form.is_hidden == False,  # noqa
+            )
+            .with_entities(Form)
+            .order_by(Form.name, Form.id)
+            .all()
+        )
+    survey_forms = non_incident_forms.filter(FormAlias.form_type == "SURVEY", FormAlias.is_hidden == False).all()  # noqa
 
     # get form serial numbers
     form_ids_with_serials = (
@@ -257,11 +270,54 @@ def _get_form_data(participant: Participant):
         .order_by(FormAlias.id, Submission.serial_no)
     )
 
-    all_forms = checklist_forms.all() + incident_forms.all() + survey_forms.all()
+    all_forms = checklist_forms + incident_forms.all() + survey_forms
 
     serials = [{"form": pair[0], "serial": pair[1]} for pair in form_ids_with_serials]
 
     return all_forms, serials
+
+
+def _get_existing_submissions(participant: Participant):
+    """Return existing checklist/survey submissions on the server for this participant."""
+    EventAlias = aliased(Event, flat=True)
+    FormAlias = aliased(Form, flat=True)
+
+    rows = (
+        Submission.query.filter(
+            Submission.participant_id == participant.id,
+            Submission.submission_type == "O",
+        )
+        .join(
+            EventAlias,
+            and_(EventAlias.participant_set_id == participant.participant_set_id, Submission.event_id == EventAlias.id),
+        )
+        .join(FormAlias, Submission.form_id == FormAlias.id)
+        .filter(FormAlias.form_type.in_(["CHECKLIST", "SURVEY"]), FormAlias.is_hidden == False)  # noqa
+        .order_by(Submission.id.desc())
+        .all()
+    )
+
+    result = []
+    seen = set()
+    for sub in rows:
+        key = (sub.form_id, sub.serial_no)
+        if key in seen:
+            continue
+        seen.add(key)
+        if not sub.data and not sub.participant_updated:
+            continue
+        result.append(
+            {
+                "form": sub.form_id,
+                "type": sub.form.form_type,
+                "serial": sub.serial_no,
+                "data": sub.data or {},
+                "uuid": str(sub.uuid) if sub.uuid else None,
+                "updated": sub.participant_updated.isoformat() if sub.participant_updated else None,
+            }
+        )
+
+    return result
 
 
 @csrf.exempt
@@ -280,6 +336,7 @@ def get_forms():
         return response
 
     forms, serials = _get_form_data(participant)
+    existing_submissions = _get_existing_submissions(participant)
 
     form_data = FormSchema(many=True).dump(forms)
 
@@ -287,6 +344,7 @@ def get_forms():
         "data": {
             "forms": form_data,
             "serials": serials,
+            "submissions": existing_submissions,
         },
         "message": gettext("ok"),
         "status": "ok",
