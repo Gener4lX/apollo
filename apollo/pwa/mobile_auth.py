@@ -98,7 +98,7 @@ def verify_wp_token(token: str, secret: str, issuer: str = "") -> Dict[str, Any]
             break
 
     if not matched:
-        raise MobileAuthError("Invalid token")
+        raise MobileAuthError("Token signature mismatch")
 
     now = time.time()
     exp = claims.get("exp")

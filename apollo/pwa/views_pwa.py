@@ -133,7 +133,10 @@ def mobile_auth():
         phone = phone_from_claims(claims)
     except MobileAuthError as error:
         logger.warning("Mobile sign-in rejected: %s", error.message)
-        return _mobile_error(_("Could not verify your sign-in. Please log in to the DEOW app again."), error.status)
+        return _mobile_error(
+            _("Could not verify your sign-in (%(reason)s). Please log in to the DEOW app again.", reason=error.message),
+            error.status,
+        )
 
     match_key = phone_match_key(phone)
     participants = _find_participants_by_phone(match_key) if match_key else []
