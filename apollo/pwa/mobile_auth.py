@@ -62,7 +62,14 @@ def verify_wp_token(token: str, secret: str, issuer: str = "") -> Dict[str, Any]
     ``secret`` may contain multiple candidate secrets separated by ``||`` (for example when both
     ``JWT_AUTH_SECRET_KEY`` and WordPress's ``wp_salt('auth')`` fallback are configured).
     """
-    candidates = [s.strip() for s in (secret or "").split("||") if s.strip()]
+    raw_candidates = [s.strip() for s in (secret or "").split("||") if s.strip()]
+    candidates = []
+    for cand in raw_candidates:
+        if cand not in candidates:
+            candidates.append(cand)
+        unescaped = cand.replace("$$", "$")
+        if unescaped not in candidates:
+            candidates.append(unescaped)
     if not candidates:
         raise MobileAuthError("Mobile sign-in is not configured", status=503)
 

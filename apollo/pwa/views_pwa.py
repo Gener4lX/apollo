@@ -132,7 +132,22 @@ def mobile_auth():
         )
         phone = phone_from_claims(claims)
     except MobileAuthError as error:
-        logger.warning("Mobile sign-in rejected: %s", error.message)
+        token_preview = (auth_header or "")[-16:]
+        payload_preview = ""
+        try:
+            parts = (auth_header or "").split(".")
+            if len(parts) == 3:
+                import base64
+                p = parts[1] + "=" * ((4 - len(parts[1]) % 4) % 4)
+                payload_preview = base64.urlsafe_b64decode(p.encode("ascii")).decode("utf-8", errors="ignore")
+        except Exception:
+            pass
+        logger.warning(
+            "Mobile sign-in rejected: %s (tail=%s, payload=%s)",
+            error.message,
+            token_preview,
+            payload_preview,
+        )
         return _mobile_error(
             _("Could not verify your sign-in (%(reason)s). Please log in to the DEOW app again.", reason=error.message),
             error.status,
