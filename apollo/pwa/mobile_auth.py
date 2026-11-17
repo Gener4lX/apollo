@@ -83,14 +83,12 @@ def _b64url_decode(data: str) -> bytes:
 
 def verify_wp_token(token: str, secret: str, issuer: str = "") -> Dict[str, Any]:
     """Verify a WordPress-issued HS256 JWT and return its claims."""
-    raw_candidates = [s.strip() for s in (secret or "").split("||") if s.strip()]
+    raw_candidates = [s.strip().lstrip("/") for s in (secret or "").split("||") if s.strip()]
     candidates = []
     for cand in raw_candidates:
-        if cand not in candidates:
-            candidates.append(cand)
-        unescaped = cand.replace("$$", "$")
-        if unescaped not in candidates:
-            candidates.append(unescaped)
+        for variant in (cand, cand.replace("$$", "$")):
+            if variant and variant not in candidates:
+                candidates.append(variant)
     if not candidates:
         raise MobileAuthError("Mobile sign-in is not configured", status=503)
 
