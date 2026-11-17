@@ -113,21 +113,26 @@ def _mobile_error(message, status=HTTPStatus.UNAUTHORIZED):
 def mobile_auth():
     """Sign an observer in from the DEOW mobile app.
 
-    The app passes the observer's WordPress JWT as a bearer token. The observer's phone number
-    (taken from the token) is matched against participant phone contacts. If one participant matches
-    they are signed in directly, otherwise the observer chooses from the matching participants.
+    The app passes the observer's WordPress JWT as a bearer token (or ``token`` query param if a
+    reverse proxy strips the Authorization header). The observer's phone number (taken from the token)
+    is matched against participant phone contacts. If one participant matches they are signed in
+    directly, otherwise the observer chooses from the matching participants.
     """
     if not current_app.config.get("MOBILE_AUTH_ENABLED"):
         return _mobile_error(_("Mobile sign-in is not available."), HTTPStatus.NOT_FOUND)
 
+    auth_header = request.headers.get("Authorization")
+    if not auth_header and request.args.get("token"):
+        auth_header = f"Bearer {request.args.get('token')}"
+
     try:
-        token = extract_bearer_token(request.headers.get("Authorization"))
+        token = extract_bearer_token(auth_header)
         claims = verify_wp_token(
             token, current_app.config["WP_JWT_SECRET"], current_app.config.get("WP_JWT_ISSUER", "")
         )
         phone = phone_from_claims(claims)
     except MobileAuthError as error:
-        logger.info("Mobile sign-in rejected: %s", error.message)
+        logger.warning("Mobile sign-in rejected: %s", error.message)
         return _mobile_error(_("Could not verify your sign-in. Please log in to the DEOW app again."), error.status)
 
     match_key = phone_match_key(phone)

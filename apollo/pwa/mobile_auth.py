@@ -59,8 +59,11 @@ def verify_wp_token(token: str, secret: str, issuer: str = "") -> Dict[str, Any]
     """Verify a WordPress-issued HS256 JWT and return its claims.
 
     Only HS256 is accepted (never "none" or asymmetric algorithms) and the token must carry an expiry.
+    ``secret`` may contain multiple candidate secrets separated by ``||`` (for example when both
+    ``JWT_AUTH_SECRET_KEY`` and WordPress's ``wp_salt('auth')`` fallback are configured).
     """
-    if not secret:
+    candidates = [s.strip() for s in (secret or "").split("||") if s.strip()]
+    if not candidates:
         raise MobileAuthError("Mobile sign-in is not configured", status=503)
 
     if not isinstance(token, str):
@@ -85,10 +88,16 @@ def verify_wp_token(token: str, secret: str, issuer: str = "") -> Dict[str, Any]
         raise MobileAuthError("Invalid token")
 
     signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
-    expected_sig = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
     actual_sig = _b64url_decode(sig_b64)
 
-    if not hmac.compare_digest(expected_sig, actual_sig):
+    matched = False
+    for candidate in candidates:
+        expected_sig = hmac.new(candidate.encode("utf-8"), signing_input, hashlib.sha256).digest()
+        if hmac.compare_digest(expected_sig, actual_sig):
+            matched = True
+            break
+
+    if not matched:
         raise MobileAuthError("Invalid token")
 
     now = time.time()
